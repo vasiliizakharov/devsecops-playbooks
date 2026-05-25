@@ -1,0 +1,57 @@
+# /etc/sudoers.d/<APP_USER>-tier2
+#
+# Tier-2 limited sudoer template.
+# Goal: a service account that can do its routine operational tasks but cannot
+# escalate to root shell, edit security-critical config, or read other tenants'
+# data.
+#
+# Install with:
+#   visudo -cf /etc/sudoers.d/<APP_USER>-tier2  # validate
+#   install -o root -g root -m 0440 ./sudoers-tier2-template /etc/sudoers.d/<APP_USER>-tier2
+#
+# The Tier-2 model:
+#   * Explicit ALLOW list (no global ALL)
+#   * Denylist for known-dangerous commands even if reachable indirectly
+#   * iolog enabled so every invocation is recorded for audit
+
+Defaults:<APP_USER>     !lecture, !authenticate
+Defaults:<APP_USER>     log_output, iolog_dir="/var/log/sudo-io/%{user}/%{epoch}"
+Defaults:<APP_USER>     log_input
+Defaults:<APP_USER>     env_keep += "REQUEST_ID TENANT_ID"
+
+# --- ALLOW list ---------------------------------------------------------------
+
+Cmnd_Alias  TIER2_NGINX   = /usr/sbin/nginx -t, \
+                            /usr/sbin/nginx -s reload, \
+                            /bin/systemctl reload nginx, \
+                            /bin/systemctl status nginx
+
+Cmnd_Alias  TIER2_FPM     = /bin/systemctl reload php8.1-fpm, \
+                            /bin/systemctl status php8.1-fpm
+
+Cmnd_Alias  TIER2_APP     = /usr/local/bin/<APP_USER>-deploy.sh, \
+                            /usr/local/bin/<APP_USER>-migrate.sh
+
+Cmnd_Alias  TIER2_READ    = /usr/bin/journalctl -u nginx*, \
+                            /usr/bin/journalctl -u <APP_USER>-*, \
+                            /usr/bin/tail -*F /var/log/nginx/<DOMAIN>-*.log, \
+                            /usr/bin/tail -*n */var/log/nginx/<DOMAIN>-*.log
+
+<APP_USER>  ALL=(root) NOPASSWD: TIER2_NGINX, TIER2_FPM, TIER2_APP, TIER2_READ
+
+# --- DENY list (defence-in-depth) ---------------------------------------------
+
+# Hard-block escape hatches even if reachable through aliases above.
+Cmnd_Alias  TIER2_DENY    = /bin/su, /bin/su -, /usr/bin/sudo, \
+                            /bin/bash, /usr/bin/bash, /usr/bin/zsh, /usr/bin/sh, \
+                            /usr/bin/vi, /usr/bin/vim, /usr/bin/nano, /usr/bin/less, \
+                            /usr/bin/tee, /usr/bin/dd, \
+                            /usr/sbin/visudo, \
+                            /bin/chmod, /bin/chown, /bin/chgrp, \
+                            /usr/bin/passwd, \
+                            /sbin/iptables*, /sbin/ip6tables*, \
+                            /usr/bin/find */bin/* -exec*
+
+<APP_USER>  ALL=(ALL) !TIER2_DENY
+
+# --- End ---------------------------------------------------------------------
